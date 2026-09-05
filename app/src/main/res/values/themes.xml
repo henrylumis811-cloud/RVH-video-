@@ -1,0 +1,15 @@
+<resources>
+    <!--
+        Compose owns all real theming (RvhVideoTheme in ui/theme/Theme.kt).
+        This XML theme exists only because the manifest/Activity declarations
+        require a resource theme to exist — it just needs to be a no-action-bar
+        dark base so there's no flash of a Material action bar before Compose
+        content renders.
+    -->
+    <style name="Theme.RvhVideo" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:statusBarColor">@android:color/black</item>
+        <item name="android:navigationBarColor">@android:color/black</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>
