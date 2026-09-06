@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!--
+        Android 11-12 (API 30-32): legacy scoped-storage read permission.
+        maxSdkVersion caps it so Android 13+ devices don't grant/request
+        a permission they don't need — READ_MEDIA_VIDEO replaces it there.
+    -->
+    <uses-permission
+        android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+
+    <!-- Android 13+ (API 33+): granular per-media-type permission. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
+
+    <!-- Required for the app to appear in Android 14+'s photo picker fallback flows. -->
+    <uses-permission android:name="android.permission.READ_MEDIA_VISUAL_USER_SELECTED" />
+
+    <application
+        android:name=".RvhVideoApp"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.RvhVideo"
+        android:hardwareAccelerated="true"
+        tools:targetApi="36">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:theme="@style/Theme.RvhVideo"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|uiMode"
+            android:supportsPictureInPicture="true"
+            android:resizeableActivity="true"
+            android:enableOnBackInvokedCallback="true">
+            <!--
+                enableOnBackInvokedCallback: opts into predictive back on Android 13+.
+                On Android 11-12 this flag is simply ignored, so the standard
+                back-button behavior applies there with no branching needed in code.
+            -->
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
