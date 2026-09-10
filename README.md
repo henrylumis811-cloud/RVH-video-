@@ -12,9 +12,6 @@ Step 6 introduces the first persistent personal-media layer: **Favorites**.
 - Favorites are persistent across app restarts and rescans.
 - Favorite state is stored separately from classification, so recategorization does not erase it.
 
-## Important
-
-The project was not Android-build verified in this environment because the distribution does not contain the Gradle wrapper JAR and no Android SDK/system Gradle is available here.
 
 ## Legendary Step 7 — Collections
 
