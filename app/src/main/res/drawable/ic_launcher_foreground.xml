@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Rounded glass square behind the play glyph, echoing the app's card language -->
+    <path
+        android:fillColor="#1D2126"
+        android:fillAlpha="0.9"
+        android:pathData="M34,34 h40 a10,10 0 0 1 10,10 v40 a10,10 0 0 1 -10,10 h-40 a10,10 0 0 1 -10,-10 v-40 a10,10 0 0 1 10,-10 z" />
+    <!-- Play triangle, teal accent -->
+    <path
+        android:fillColor="#2DD4C8"
+        android:pathData="M46,40 L72,54 L46,68 Z" />
+</vector>
