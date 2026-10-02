@@ -1,0 +1,155 @@
+name: RVH Video — Optimized Build & Downloadable Release
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+# The workflow publishes one verified, installable APK to a rolling GitHub
+# Release named "Latest". Actions artifacts remain available for CI history.
+permissions:
+  contents: write
+
+concurrency:
+  group: rvh-video-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Opt into the Node 24 runtime for any compatible JavaScript actions that
+  # still expose a legacy runtime internally.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: Build + verify optimized installable APK
+    runs-on: ubuntu-latest
+    # Releases are only published from non-PR runs. PRs still compile/test.
+    outputs:
+      apk-path: ${{ steps.package.outputs.apk-path }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools
+
+      - name: Install required Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-37.0" \
+            "build-tools;36.0.0"
+
+          # GitHub's current runner publishes API 37 as android-37.0 while
+          # the Android build resolves compileSdk 37 through android-37.
+          if [ ! -e "$ANDROID_SDK_ROOT/platforms/android-37" ]; then
+            ln -s "$ANDROID_SDK_ROOT/platforms/android-37.0" "$ANDROID_SDK_ROOT/platforms/android-37"
+          fi
+
+      - name: Set up Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.6.0'
+          cache-read-only: false
+
+      - name: Verify toolchain
+        run: |
+          java -version
+          gradle --version
+          adb version
+          sdkmanager --list_installed | grep -E 'platforms;android-37(\.0)?|build-tools;36.0.0|platform-tools' || true
+
+      - name: Build optimized installable release APK
+        run: gradle --no-daemon --stacktrace assembleRelease
+
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Package and verify downloadable APK
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          SOURCE_APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$SOURCE_APK"
+
+          cp "$SOURCE_APK" "dist/RVH-Video-latest.apk"
+
+          # Fail the workflow if the artifact is not a valid signed APK.
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose "dist/RVH-Video-latest.apk"
+
+          # Record a checksum beside the APK for traceability.
+          sha256sum "dist/RVH-Video-latest.apk" | tee "dist/RVH-Video-latest.apk.sha256"
+
+          echo "apk-path=dist/RVH-Video-latest.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload verified APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: RVH-Video-latest
+          path: |
+            dist/RVH-Video-latest.apk
+            dist/RVH-Video-latest.apk.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rvh-video-test-reports
+          path: |
+            app/build/reports/tests/**
+            app/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish rolling GitHub Release
+        if: ${{ github.ref == 'refs/heads/main' && success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: dist/RVH-Video-latest.apk
+          SHA_FILE: dist/RVH-Video-latest.apk.sha256
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          TAG="rvh-latest"
+
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # Keep the rolling release tag attached to the exact commit that produced the APK.
+            git tag -f "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG" --force
+            gh release upload "$TAG" "$APK" "$SHA_FILE" --clobber --repo "$REPO"
+            gh release edit "$TAG" \
+              --title "RVH Video — Latest" \
+              --notes "Latest verified, optimized, installable RVH Video test build (debug-key signed).\n\nCommit: $GITHUB_SHA\n\nDirect APK: https://github.com/$REPO/releases/download/$TAG/RVH-Video-latest.apk" \
+              --repo "$REPO"
+          else
+            gh release create "$TAG" "$APK" "$SHA_FILE" \
+              --title "RVH Video — Latest" \
+              --notes "Latest verified, optimized, installable RVH Video test build (debug-key signed).\n\nCommit: $GITHUB_SHA\n\nDirect APK: https://github.com/$REPO/releases/download/$TAG/RVH-Video-latest.apk" \
+              --repo "$REPO" \
+              --target "$GITHUB_SHA"
+          fi
+
+          echo "Published: https://github.com/$REPO/releases/download/$TAG/RVH-Video-latest.apk"

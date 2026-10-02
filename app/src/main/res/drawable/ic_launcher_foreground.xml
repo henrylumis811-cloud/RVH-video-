@@ -1,0 +1,4 @@
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Keep the approved artwork inside Android's adaptive-icon safe zone. -->
+    <item android:drawable="@drawable/rvh_app_icon" android:inset="18dp" />
+</layer-list>
