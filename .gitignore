@@ -1,0 +1,15 @@
+# Local machine / Android Studio
+.gradle/
+.idea/
+local.properties
+**/build/
+.DS_Store
+
+# Private release signing material — NEVER commit
+*.jks
+*.keystore
+*.p12
+signing.properties
+
+# Locally generated release artifacts
+/dist/

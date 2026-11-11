@@ -1,0 +1,223 @@
+name: RVH Video — Signed Release APK
+
+on:
+  push:
+    branches: [ "**" ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rvh-video-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build:
+    name: Build, sign and verify downloadable release APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          accept-android-sdk-licenses: true
+          log-accepted-android-sdk-licenses: false
+          packages: platform-tools
+
+      - name: Install required Android SDK packages
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-37.0" \
+            "build-tools;37.0.0"
+
+          # Android 17 API 37 is published by SDK Manager as android-37.0.
+          # AGP resolves compileSdk 37 using the conventional android-37 path.
+          PLATFORM_DIR="$ANDROID_SDK_ROOT/platforms"
+          test -d "$PLATFORM_DIR/android-37.0"
+          if [ ! -e "$PLATFORM_DIR/android-37" ]; then
+            ln -s android-37.0 "$PLATFORM_DIR/android-37"
+          fi
+          test -d "$PLATFORM_DIR/android-37"
+          test -d "$ANDROID_SDK_ROOT/build-tools/37.0.0"
+
+      - name: Set up Gradle 9.6.0
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '9.6.0'
+          cache-read-only: false
+
+      - name: Verify toolchain
+        run: |
+          java -version
+          gradle --version
+          adb version
+
+      - name: Decode and verify RVH release keystore
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        env:
+          RVH_RELEASE_KEYSTORE_BASE64: ${{ secrets.RVH_RELEASE_KEYSTORE_BASE64 }}
+          RVH_UPLOAD_STORE_PASSWORD: ${{ secrets.RVH_UPLOAD_STORE_PASSWORD }}
+          RVH_UPLOAD_KEY_ALIAS: ${{ secrets.RVH_UPLOAD_KEY_ALIAS }}
+          RVH_UPLOAD_KEY_PASSWORD: ${{ secrets.RVH_UPLOAD_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          KEYSTORE_PATH="$RUNNER_TEMP/rvh-video-release.jks"
+
+          echo "Checking required secrets..."
+          for name in RVH_RELEASE_KEYSTORE_BASE64 RVH_UPLOAD_STORE_PASSWORD RVH_UPLOAD_KEY_ALIAS RVH_UPLOAD_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "FAILED: $name is empty." >&2
+              exit 1
+            fi
+          done
+          echo "PASS: All four secrets are present."
+
+          echo "Decoding keystore..."
+          if ! printf '%s' "$RVH_RELEASE_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_PATH"; then
+            echo "FAILED: Base64 decoding." >&2
+            exit 1
+          fi
+          chmod 600 "$KEYSTORE_PATH"
+          if [ ! -s "$KEYSTORE_PATH" ]; then
+            echo "FAILED: Decoded keystore is empty." >&2
+            exit 1
+          fi
+          echo "PASS: Keystore decoded."
+
+          echo "Checking keystore password and alias..."
+          if ! keytool -list -keystore "$KEYSTORE_PATH" \
+            -storepass:env RVH_UPLOAD_STORE_PASSWORD \
+            -alias "$RVH_UPLOAD_KEY_ALIAS"; then
+            echo "FAILED: Keystore password or alias." >&2
+            exit 1
+          fi
+          echo "PASS: Keystore password and alias verified."
+
+          echo "Checking certificate fingerprint..."
+          ACTUAL_FINGERPRINT="$(keytool -list -v -keystore "$KEYSTORE_PATH" \
+            -storepass:env RVH_UPLOAD_STORE_PASSWORD \
+            -alias "$RVH_UPLOAD_KEY_ALIAS" |
+            awk -F': ' '/SHA256:/{print $2; exit}' |
+            tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED_FINGERPRINT="E7169D86B8D10CDD5EB7BF00238DFBD65F6E6AA1DAFE87F25DB3507EF16837C7"
+
+          if [ "$ACTUAL_FINGERPRINT" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "FAILED: Certificate fingerprint mismatch." >&2
+            exit 1
+          fi
+          echo "PASS: Correct RVH Video release certificate."
+
+          echo "RVH_UPLOAD_STORE_FILE=$KEYSTORE_PATH" >> "$GITHUB_ENV"
+
+      - name: Build signed optimized release APK
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          RVH_UPLOAD_STORE_PASSWORD: ${{ secrets.RVH_UPLOAD_STORE_PASSWORD }}
+          RVH_UPLOAD_KEY_ALIAS: ${{ secrets.RVH_UPLOAD_KEY_ALIAS }}
+          RVH_UPLOAD_KEY_PASSWORD: ${{ secrets.RVH_UPLOAD_KEY_PASSWORD }}
+        run: |
+          gradle --no-daemon --stacktrace clean assembleRelease
+
+      - name: Build debug variant for pull-request validation
+        if: ${{ github.event_name == 'pull_request' }}
+        run: gradle --no-daemon assembleDebug
+
+      - name: Run unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Verify and package signed APK
+        if: ${{ github.event_name != 'pull_request' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          SOURCE_APK="$(find app/build/outputs/apk/release -maxdepth 1 -type f -name '*.apk' -print -quit)"
+          test -n "$SOURCE_APK"
+          cp "$SOURCE_APK" dist/RVH-Video-1.0-release.apk
+
+          APKSIGNER="$(find "$ANDROID_SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -n 1)"
+          test -x "$APKSIGNER"
+          "$APKSIGNER" verify --verbose --print-certs dist/RVH-Video-1.0-release.apk | tee dist/apk-signature-verification.txt
+
+          # apksigner output labels the certificate by scheme (for example,
+          # "V2 Signer: certificate SHA-256 digest:") rather than "Signer #1".
+          # Match the actual output format and fail clearly if no digest is found.
+          ACTUAL_FINGERPRINT="$(awk -F': ' '/certificate SHA-256 digest:/{print $NF; exit}' dist/apk-signature-verification.txt | tr -d ':' | tr '[:lower:]' '[:upper:]')"
+          EXPECTED_FINGERPRINT="E7169D86B8D10CDD5EB7BF00238DFBD65F6E6AA1DAFE87F25DB3507EF16837C7"
+          if [ -z "$ACTUAL_FINGERPRINT" ]; then
+            echo "FAILED: apksigner did not report a certificate SHA-256 digest." >&2
+            exit 1
+          fi
+          if [ "$ACTUAL_FINGERPRINT" != "$EXPECTED_FINGERPRINT" ]; then
+            echo "FAILED: APK certificate fingerprint does not match the approved RVH Video release identity." >&2
+            exit 1
+          fi
+          echo "PASS: APK is signed with the approved RVH Video release certificate."
+          sha256sum dist/RVH-Video-1.0-release.apk | tee dist/RVH-Video-1.0-release.apk.sha256
+
+      - name: Upload verified release artifacts
+        if: ${{ github.event_name != 'pull_request' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: RVH-Video-1.0-signed-release
+          path: |
+            dist/RVH-Video-1.0-release.apk
+            dist/RVH-Video-1.0-release.apk.sha256
+            dist/apk-signature-verification.txt
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: rvh-video-test-reports
+          path: |
+            app/build/reports/tests/**
+            app/build/test-results/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Publish rolling signed APK release
+        if: ${{ github.ref == 'refs/heads/main' && success() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APK: dist/RVH-Video-1.0-release.apk
+          SHA_FILE: dist/RVH-Video-1.0-release.apk.sha256
+          VERIFY_FILE: dist/apk-signature-verification.txt
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="$GITHUB_REPOSITORY"
+          TAG="rvh-latest"
+          NOTES="$(printf 'Verified RVH Video 1.0 release APK. Signed with the pinned RVH Video release certificate.\n\nCommit: %s\n\nSHA-256 is included alongside the APK.' "$GITHUB_SHA")"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            git tag -f "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG" --force
+            gh release upload "$TAG" "$APK" "$SHA_FILE" "$VERIFY_FILE" --clobber --repo "$REPO"
+            gh release edit "$TAG" --title "RVH Video 1.0 — Signed Release" --notes "$NOTES" --repo "$REPO"
+          else
+            gh release create "$TAG" "$APK" "$SHA_FILE" "$VERIFY_FILE" \
+              --title "RVH Video 1.0 — Signed Release" --notes "$NOTES" \
+              --repo "$REPO" --target "$GITHUB_SHA"
+          fi

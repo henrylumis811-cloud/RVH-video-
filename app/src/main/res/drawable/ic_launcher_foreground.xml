@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Transparent safe-zone canvas keeps the complete RVH Video artwork
+     inside Android adaptive-icon masks without altering the dedication art. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/rvh_launcher_foreground" />
+</layer-list>
